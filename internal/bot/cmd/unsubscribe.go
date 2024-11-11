@@ -22,7 +22,7 @@ func (cmd *Unsubscribe) Name() string {
 }
 
 func (cmd *Unsubscribe) Description() string {
-	return "Unsubscribe to Sendico updates"
+	return "Unsubscribe from search terms(s)."
 }
 
 func (cmd *Unsubscribe) Handle(s *discordgo.Session, i *discordgo.InteractionCreate) error {

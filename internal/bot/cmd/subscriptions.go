@@ -22,7 +22,7 @@ func (cmd *Subscriptions) Name() string {
 }
 
 func (cmd *Subscriptions) Description() string {
-	return "View your active subscriptions"
+	return "View active subscriptions."
 }
 
 func (cmd *Subscriptions) Handle(s *discordgo.Session, i *discordgo.InteractionCreate) error {

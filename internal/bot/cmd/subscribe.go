@@ -29,7 +29,7 @@ func (cmd *Subscribe) Name() string {
 }
 
 func (cmd *Subscribe) Description() string {
-	return "Subscribe to Sendico updates"
+	return "Subscribe to a search term and shops."
 }
 
 func (cmd *Subscribe) Options() []*discordgo.ApplicationCommandOption {

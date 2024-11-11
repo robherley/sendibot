@@ -18,7 +18,7 @@ func (cm *ping) Name() string {
 }
 
 func (cmd *ping) Description() string {
-	return "Ping the bot"
+	return "Pings the bot!"
 }
 
 func (cmd *ping) Handle(s *discordgo.Session, i *discordgo.InteractionCreate) error {
