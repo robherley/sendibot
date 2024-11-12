@@ -36,6 +36,7 @@ func (cmd *ping) Handle(s *discordgo.Session, i *discordgo.InteractionCreate) er
 	payload := map[string]interface{}{
 		"user":       user,
 		"guild_id":   i.GuildID,
+		"dm":         i.GuildID == "",
 		"channel_id": i.ChannelID,
 	}
 
