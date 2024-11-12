@@ -120,7 +120,7 @@ func (b *Bot) NotifyNewItems(termEN, userID string, items []sendico.Item) error 
 	}
 
 	if truncated {
-		content := fmt.Sprintf("⚠️ BTW! I only sent %d out of %d items. This means there were a lot results from when I last checked. Try refining your search terms a bit more or listen to less shops!", total, MaxMessagesPerNotify)
+		content := fmt.Sprintf("⚠️ BTW! I only sent %d out of %d items. This means there were a lot results from when I last checked. Try refining your search terms a bit more or listen to less shops!", MaxMessagesPerNotify, total)
 		_, err = b.session.ChannelMessageSendReply(dm.ID, content, msg.Reference())
 		if err != nil {
 			return err
