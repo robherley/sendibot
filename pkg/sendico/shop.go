@@ -4,12 +4,20 @@ import (
 	"encoding/json"
 )
 
-var Shops = map[string]Shop{
+var ShopMap = map[string]Shop{
 	YahooAuctions.Identifier(): YahooAuctions,
 	Mercari.Identifier():       Mercari,
 	Rakuma.Identifier():        Rakuma,
 	Rakuten.Identifier():       Rakuten,
 	Yahoo.Identifier():         Yahoo,
+}
+
+var Shops = []Shop{
+	Mercari,
+	Rakuma,
+	Rakuten,
+	YahooAuctions,
+	Yahoo,
 }
 
 type Shop int
@@ -70,11 +78,21 @@ func (s *Shop) UnmarshalJSON(data []byte) error {
 		return err
 	}
 
-	if shop, ok := Shops[str]; ok {
+	if shop, ok := ShopMap[str]; ok {
 		*s = shop
 	} else {
 		return NewInvalidShopError(str)
 	}
 
 	return nil
+}
+
+func ShopsFromBits(bits int) []Shop {
+	shops := make([]Shop, 0, len(Shops))
+	for _, shop := range Shops {
+		if bits&int(shop) != 0 {
+			shops = append(shops, shop)
+		}
+	}
+	return shops
 }

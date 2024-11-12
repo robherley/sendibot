@@ -49,3 +49,32 @@ table "subscriptions" {
     unique = true
   }
 }
+
+table "items" {
+  schema = schema.main
+  column "id" {
+    type = text
+  }
+  column "shop" {
+    type = int
+  }
+  column "code" {
+    type = text
+  }
+  column "subscription_id" {
+    type = text
+  }
+  column "created_at" {
+    type = datetime
+  }
+  primary_key {
+    columns = [column.id]
+  }
+  index "idx_subscription_id_shop_code" {
+    columns = [column.subscription_id, column.shop, column.code]
+    unique = true
+  }
+  index "idx_created_at" {
+    columns = [column.created_at]
+  }
+}

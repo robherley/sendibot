@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"ariga.io/atlas/sql/migrate"
 	aschema "ariga.io/atlas/sql/schema"
@@ -99,8 +100,8 @@ func (s *SQLite) CreateSubscription(subscription *Subscription) error {
 		subscription.ID,
 		subscription.UserID,
 		subscription.TermID,
-		subscription.LastNotifiedAt,
-		subscription.shops,
+		time.Now().UTC(),
+		subscription.ShopsBitField,
 	)
 	if err != nil {
 		var sqliteErr sqlite3.Error
@@ -114,7 +115,7 @@ func (s *SQLite) CreateSubscription(subscription *Subscription) error {
 
 func (s *SQLite) GetUserSubscriptions(userID string) ([]TermSubscription, error) {
 	const query = `
-		SELECT t.id, t.en, t.jp, s.id, s.last_notified_at, s.shops
+		SELECT t.id, t.en, t.jp, s.id, s.user_id, s.term_id, s.last_notified_at, s.shops
 		FROM subscriptions s
 		JOIN terms t ON t.id = s.term_id
 		WHERE s.user_id = ?
@@ -130,7 +131,57 @@ func (s *SQLite) GetUserSubscriptions(userID string) ([]TermSubscription, error)
 	for rows.Next() {
 		var term Term
 		var subscription Subscription
-		if err := rows.Scan(&term.ID, &term.EN, &term.JP, &subscription.ID, &subscription.LastNotifiedAt, &subscription.shops); err != nil {
+		if err := rows.Scan(
+			&term.ID,
+			&term.EN,
+			&term.JP,
+			&subscription.ID,
+			&subscription.UserID,
+			&subscription.TermID,
+			&subscription.LastNotifiedAt,
+			&subscription.ShopsBitField,
+		); err != nil {
+			return nil, err
+		}
+
+		subscriptions = append(subscriptions, TermSubscription{
+			Term:         term,
+			Subscription: subscription,
+		})
+	}
+
+	return subscriptions, nil
+}
+
+func (s *SQLite) FindSubscriptionsToNotify(window time.Duration, limit int) ([]TermSubscription, error) {
+	const query = `
+		SELECT t.id, t.en, t.jp, s.id, s.user_id, s.term_id, s.last_notified_at, s.shops
+		FROM subscriptions s
+		JOIN terms t ON t.id = s.term_id
+		WHERE s.last_notified_at < ?
+		LIMIT ?
+	`
+
+	rows, err := s.DB.Query(query, time.Now().UTC().Add(-window), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var subscriptions []TermSubscription
+	for rows.Next() {
+		var term Term
+		var subscription Subscription
+		if err := rows.Scan(
+			&term.ID,
+			&term.EN,
+			&term.JP,
+			&subscription.ID,
+			&subscription.UserID,
+			&subscription.TermID,
+			&subscription.LastNotifiedAt,
+			&subscription.ShopsBitField,
+		); err != nil {
 			return nil, err
 		}
 
@@ -148,24 +199,118 @@ func (s *SQLite) DeleteUserSubscriptions(userID string, ids ...string) error {
 		return nil
 	}
 
-	query := `
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return err
+	}
+
+	subscriptionsDeleteQuery := `
 	DELETE FROM
 		subscriptions
 	WHERE
 		id IN (%s) AND user_id = ?`
 
-	query = fmt.Sprintf(query, strings.Repeat("?,", len(ids)-1)+"?")
+	subscriptionsDeleteQuery = fmt.Sprintf(subscriptionsDeleteQuery, strings.Repeat("?,", len(ids)-1)+"?")
 
 	args := make([]any, len(ids))
 	for i, id := range ids {
 		args[i] = id
 	}
-	args = append(args, userID)
 
-	_, err := s.DB.Exec(query, args...)
+	_, err = tx.Exec(subscriptionsDeleteQuery, append(args, userID)...)
+	if err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+
+	itemsDeleteQuery := `
+	DELETE FROM
+		items
+	WHERE
+		subscription_id IN (%s)`
+	itemsDeleteQuery = fmt.Sprintf(itemsDeleteQuery, strings.Repeat("?,", len(ids)-1)+"?")
+
+	_, err = tx.Exec(itemsDeleteQuery, args...)
+	if err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+
+	return tx.Commit()
+}
+
+func (s *SQLite) TrackItems(items ...Item) error {
+	const query = `
+	INSERT INTO
+		items (id, shop, code, subscription_id, created_at)
+	VALUES (?, ?, ?, ?, ?)`
+
+	tx, err := s.DB.Begin()
 	if err != nil {
 		return err
 	}
 
-	return nil
+	for _, item := range items {
+		item.ID = newID()
+		_, err = tx.Exec(query, item.ID, item.Shop, item.Code, item.SubscriptionID, time.Now().UTC())
+		if err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+	}
+
+	return tx.Commit()
+}
+
+func (s *SQLite) FilterBySeenItems(items []Item) ([]Item, error) {
+	if len(items) == 0 {
+		return nil, nil
+	}
+
+	query := `
+	SELECT
+			subscription_id, shop, code
+	FROM
+			items
+	WHERE
+			(subscription_id, shop, code) IN (`
+
+	var args []interface{}
+	for i, item := range items {
+		if i > 0 {
+			query += ","
+		}
+		query += "(?, ?, ?)"
+		args = append(args, item.SubscriptionID, item.Shop, item.Code)
+	}
+	query += ")"
+
+	rows, err := s.DB.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	foundItems := make(map[Item]struct{})
+	for rows.Next() {
+		var item Item
+		if err := rows.Scan(&item.SubscriptionID, &item.Shop, &item.Code); err != nil {
+			return nil, err
+		}
+		foundItems[item] = struct{}{}
+	}
+
+	var notFoundItems []Item
+	for _, item := range items {
+		if _, found := foundItems[item]; !found {
+			notFoundItems = append(notFoundItems, item)
+		}
+	}
+
+	return notFoundItems, nil
+}
+
+func (s *SQLite) CleanupItems(window time.Duration) error {
+	_, err := s.DB.Exec("DELETE FROM items WHERE created_at < ?", time.Now().UTC().Add(-window))
+	return err
 }

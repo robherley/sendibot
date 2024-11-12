@@ -4,9 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
+	"log/slog"
 	"strings"
-	"time"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/robherley/sendibot/internal/db"
@@ -98,19 +97,18 @@ func (cmd *Subscribe) Handle(s *discordgo.Session, i *discordgo.InteractionCreat
 			return nil
 		}
 
-		searchTerm, err := cmd.db.GetTerm(args[1])
+		term, err := cmd.db.GetTerm(args[1])
 		if err != nil {
 			return err
 		}
 
-		subscription := db.Subscription{
-			UserID:         userID,
-			TermID:         searchTerm.ID,
-			LastNotifiedAt: time.Now().UTC(),
+		subscription := &db.Subscription{
+			UserID: userID,
+			TermID: term.ID,
 		}
 
 		for _, shop := range i.MessageComponentData().Values {
-			found, ok := sendico.Shops[shop]
+			found, ok := sendico.ShopMap[shop]
 			if !ok {
 				continue
 			}
@@ -121,12 +119,12 @@ func (cmd *Subscribe) Handle(s *discordgo.Session, i *discordgo.InteractionCreat
 			return nil
 		}
 
-		if err = cmd.db.CreateSubscription(&subscription); err != nil {
+		if err = cmd.db.CreateSubscription(subscription); err != nil {
 			if errors.Is(err, db.ErrConstraintUnique) {
 				return s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 					Type: discordgo.InteractionResponseChannelMessageWithSource,
 					Data: &discordgo.InteractionResponseData{
-						Content: fmt.Sprintf("⛔ Already subscribed to shops for search: %q.\nSee subscriptions with `/subscriptions` and `/unsubscribe` if you wish to change your configured subscriptions.", searchTerm.EN),
+						Content: fmt.Sprintf("⛔ Already subscribed to shops for search: %q.\nSee subscriptions with `/subscriptions` and `/unsubscribe` if you wish to change your configured subscriptions.", term.EN),
 					},
 				})
 			}
@@ -134,12 +132,18 @@ func (cmd *Subscribe) Handle(s *discordgo.Session, i *discordgo.InteractionCreat
 			return err
 		}
 
+		err = cmd.seedCurrentItems(term, subscription)
+		if err != nil {
+			slog.Error("failed to seed current items", "err", err)
+			// this is best effort
+		}
+
 		shops := make([]string, 0, len(subscription.Shops()))
 		for _, shop := range subscription.Shops() {
 			shops = append(shops, fmt.Sprintf("<:%s:%s> %s", shop.Identifier(), cmd.emojis[shop.Identifier()], shop.Name()))
 		}
 
-		msg := fmt.Sprintf("🔔 Subscribed for term: %q (%s)\nWill check shops: %s", searchTerm.EN, searchTerm.JP, strings.Join(shops, ", "))
+		msg := fmt.Sprintf("🔔 Subscribed for term: %q (%s)\nWill check shops: %s", term.EN, term.JP, strings.Join(shops, ", "))
 
 		dm, err := s.UserChannelCreate(userID)
 		if err != nil {
@@ -162,6 +166,28 @@ func (cmd *Subscribe) Handle(s *discordgo.Session, i *discordgo.InteractionCreat
 	}
 }
 
+func (cmd *Subscribe) seedCurrentItems(term *db.Term, sub *db.Subscription) error {
+	results, err := cmd.sendico.BulkSearch(context.Background(), term.JP, sub.Shops()...)
+	if err != nil {
+		return err
+	}
+
+	if len(results) == 0 {
+		return nil
+	}
+
+	items := make([]db.Item, 0, len(results))
+	for _, result := range results {
+		items = append(items, db.Item{
+			Shop:           result.Shop,
+			Code:           result.Code,
+			SubscriptionID: sub.ID,
+		})
+	}
+
+	return cmd.db.TrackItems(items...)
+}
+
 func (cmd *Subscribe) options() []discordgo.SelectMenuOption {
 	if cmd.opts != nil {
 		return cmd.opts
@@ -177,10 +203,6 @@ func (cmd *Subscribe) options() []discordgo.SelectMenuOption {
 			},
 		})
 	}
-
-	sort.Slice(cmd.opts, func(i, j int) bool {
-		return cmd.opts[i].Label < cmd.opts[j].Label
-	})
 
 	return cmd.opts
 }

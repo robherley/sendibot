@@ -13,6 +13,7 @@ import (
 	"github.com/lmittmann/tint"
 	"github.com/robherley/sendibot/internal/bot"
 	"github.com/robherley/sendibot/internal/db"
+	"github.com/robherley/sendibot/internal/looper"
 	"github.com/robherley/sendibot/pkg/sendico"
 )
 
@@ -92,6 +93,11 @@ func run() error {
 	}
 
 	slog.Info("sendibot is initialized")
+
+	l := looper.New(db, sendico, bot)
+	go l.Notify(ctx)
+	go l.Cleanup(ctx)
+
 	wait()
 	return nil
 }

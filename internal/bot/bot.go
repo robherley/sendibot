@@ -2,6 +2,7 @@ package bot
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
 
 	"github.com/bwmarrin/discordgo"
@@ -11,10 +12,9 @@ import (
 	"github.com/robherley/sendibot/pkg/sendico"
 )
 
-var (
-// rebLabsGuild = "943691292330819624"
-// rebLabsGuild = ""
-)
+// MaxMessagesPerNotify is the maximum number of messages to send in a single notify.
+// This number was based on the discord maximum of 10 embeds per message.
+const MaxMessagesPerNotify = 10
 
 type Bot struct {
 	DB      db.DB
@@ -65,6 +65,69 @@ func (b *Bot) Start() error {
 
 func (b *Bot) Close() error {
 	return b.session.Close()
+}
+
+func (b *Bot) NotifyNewItems(termEN, userID string, items []sendico.Item) error {
+	dm, err := b.session.UserChannelCreate(userID)
+	if err != nil {
+		return err
+	}
+
+	total := len(items)
+	truncated := false
+	if len(items) > MaxMessagesPerNotify {
+		items = items[:MaxMessagesPerNotify]
+		truncated = true
+	}
+
+	embeds := make([]*discordgo.MessageEmbed, 0, len(items))
+	for _, item := range items {
+		// TODOs:
+		// - auction specific fields
+		// - translate???
+		embeds = append(embeds, &discordgo.MessageEmbed{
+			Title: item.Name,
+			Image: &discordgo.MessageEmbedImage{
+				URL: item.Image,
+			},
+			Fields: []*discordgo.MessageEmbedField{
+				{
+					Name:   "Price",
+					Value:  fmt.Sprintf("¥%d ($%d)", item.PriceYen, item.PriceUSD),
+					Inline: true,
+				},
+				{
+					Name:   "Shop",
+					Value:  fmt.Sprintf("<:%s:%s> %s", item.Shop.Identifier(), b.emojis[item.Shop.Identifier()], item.Shop.Name()),
+					Inline: true,
+				},
+				{
+					Name:   "Category",
+					Value:  item.Category.String(),
+					Inline: true,
+				},
+			},
+			URL: item.SendicoLink(),
+		})
+	}
+
+	msg, err := b.session.ChannelMessageSendComplex(dm.ID, &discordgo.MessageSend{
+		Content: fmt.Sprintf("🔔 New items for %q!", termEN),
+		Embeds:  embeds,
+	})
+	if err != nil {
+		return err
+	}
+
+	if truncated {
+		content := fmt.Sprintf("⚠️ BTW! I only sent %d out of %d items. This means there were a lot results from when I last checked. Try refining your search terms a bit more or listen to less shops!", total, MaxMessagesPerNotify)
+		_, err = b.session.ChannelMessageSendReply(dm.ID, content, msg.Reference())
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func (b *Bot) addHandlers() error {

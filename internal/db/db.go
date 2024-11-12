@@ -3,7 +3,6 @@ package db
 import (
 	"context"
 	"errors"
-	"sort"
 	"time"
 
 	"github.com/robherley/sendibot/pkg/sendico"
@@ -16,11 +15,15 @@ var (
 type DB interface {
 	Close() error
 	Migrate(context.Context) error
-	CreateTerm(*Term) error
-	GetTerm(id string) (*Term, error)
 	CreateSubscription(*Subscription) error
 	GetUserSubscriptions(userID string) ([]TermSubscription, error)
+	FindSubscriptionsToNotify(window time.Duration, limit int) ([]TermSubscription, error)
 	DeleteUserSubscriptions(userID string, ids ...string) error
+	CreateTerm(*Term) error
+	GetTerm(id string) (*Term, error)
+	FilterBySeenItems(items []Item) ([]Item, error)
+	TrackItems(items ...Item) error
+	CleanupItems(window time.Duration) error
 }
 
 type Term struct {
@@ -34,29 +37,25 @@ type Subscription struct {
 	UserID         string
 	TermID         string
 	LastNotifiedAt time.Time
-	shops          int
+	ShopsBitField  int
 }
 
 func (s *Subscription) AddShop(shop sendico.Shop) {
-	s.shops |= int(shop)
+	s.ShopsBitField |= int(shop)
 }
 
 func (s *Subscription) Shops() []sendico.Shop {
-	shops := []sendico.Shop{}
-	for _, shop := range sendico.Shops {
-		if s.shops&int(shop) != 0 {
-			shops = append(shops, shop)
-		}
-	}
-
-	sort.Slice(shops, func(i, j int) bool {
-		return shops[i].Name() < shops[j].Name()
-	})
-
-	return shops
+	return sendico.ShopsFromBits(s.ShopsBitField)
 }
 
 type TermSubscription struct {
-	Term
-	Subscription
+	Term         Term
+	Subscription Subscription
+}
+
+type Item struct {
+	ID             string
+	Shop           sendico.Shop
+	Code           string
+	SubscriptionID string
 }

@@ -11,6 +11,9 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
+
+	"golang.org/x/sync/errgroup"
 )
 
 var (
@@ -163,12 +166,12 @@ func (c *Client) Translate(ctx context.Context, text string) (string, error) {
 
 // Search performs a search for the given term on the specified merchant. It will only return the first page of results.
 // The supplied search term must be in Japanese.
-func (c *Client) Search(ctx context.Context, shop Shop, term string) ([]Item, error) {
+func (c *Client) Search(ctx context.Context, shop Shop, termJP string) ([]Item, error) {
 	path := url.URL{
 		Path: fmt.Sprintf("/api/%s/items", shop.Identifier()),
 	}
 	q := path.Query()
-	q.Set("search", term)
+	q.Set("search", termJP)
 	q.Set("page", "1")
 	q.Set("global", "1")
 	path.RawQuery = q.Encode()
@@ -195,4 +198,31 @@ func (c *Client) Search(ctx context.Context, shop Shop, term string) ([]Item, er
 	}
 
 	return response.Data.Items, nil
+}
+
+func (c *Client) BulkSearch(ctx context.Context, termJP string, shops ...Shop) ([]Item, error) {
+	items := make([]Item, 0)
+	itemsMu := sync.Mutex{}
+
+	g := new(errgroup.Group)
+	for _, shop := range shops {
+		shop := shop
+		g.Go(func() error {
+			results, err := c.Search(ctx, shop, termJP)
+			if err != nil {
+				return err
+			}
+
+			itemsMu.Lock()
+			defer itemsMu.Unlock()
+			items = append(items, results...)
+			return nil
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
+
+	return items, nil
 }
