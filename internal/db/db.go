@@ -16,8 +16,11 @@ type DB interface {
 	Close() error
 	Migrate(context.Context) error
 	CreateSubscription(*Subscription) error
+	GetSubscription(id string) (*Subscription, error)
+	UpdateSubscription(*Subscription) error
 	GetUserSubscriptions(userID string) ([]TermSubscription, error)
 	FindSubscriptionsToNotify(window time.Duration, limit int) ([]TermSubscription, error)
+	SetNotified(subIDs ...string) error
 	DeleteUserSubscriptions(userID string, ids ...string) error
 	CreateTerm(*Term) error
 	GetTerm(id string) (*Term, error)
@@ -38,6 +41,8 @@ type Subscription struct {
 	TermID         string
 	LastNotifiedAt time.Time
 	ShopsBitField  int
+	MinPrice       *int
+	MaxPrice       *int
 }
 
 func (s *Subscription) AddShop(shop sendico.Shop) {

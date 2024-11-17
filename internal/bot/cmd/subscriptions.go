@@ -53,6 +53,23 @@ func (cmd *Subscriptions) Handle(s *discordgo.Session, i *discordgo.InteractionC
 			builder.WriteString("\" (")
 			builder.WriteString(sub.Term.JP)
 			builder.WriteString(") ")
+
+			if sub.Subscription.MinPrice != nil || sub.Subscription.MaxPrice != nil {
+				builder.WriteString("¥")
+				if sub.Subscription.MinPrice != nil {
+					builder.WriteString(strconv.Itoa(*sub.Subscription.MinPrice))
+				} else {
+					builder.WriteString("0")
+				}
+				builder.WriteString(" - ¥")
+				if sub.Subscription.MaxPrice != nil {
+					builder.WriteString(strconv.Itoa(*sub.Subscription.MaxPrice))
+				} else {
+					builder.WriteString("∞")
+				}
+				builder.WriteString(" ")
+			}
+
 			for _, shop := range sub.Subscription.Shops() {
 				builder.WriteString("<:" + shop.Identifier() + ":" + cmd.emojis[shop.Identifier()] + "> ")
 			}

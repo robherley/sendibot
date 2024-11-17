@@ -32,6 +32,14 @@ table "subscriptions" {
   column "term_id" {
     type = text
   }
+  column "min_price" {
+    type = int
+    null = true
+  }
+  column "max_price" {
+    type = int
+    null = true
+  }
   column "last_notified_at" {
     type = datetime
   }
