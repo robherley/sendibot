@@ -93,7 +93,9 @@ func (s *SQLite) GetTerm(id string) (*Term, error) {
 }
 
 func (s *SQLite) CreateSubscription(subscription *Subscription) error {
-	const query = `INSERT INTO subscriptions (id, user_id, term_id, last_notified_at, shops) VALUES (?, ?, ?, ?, ?)`
+	const query = `INSERT INTO subscriptions (
+		id, user_id, term_id, last_notified_at, shops, min_price, max_price
+	) VALUES (?, ?, ?, ?, ?, ?, ?)`
 	subscription.ID = newID()
 
 	_, err := s.DB.Exec(query,
@@ -102,12 +104,61 @@ func (s *SQLite) CreateSubscription(subscription *Subscription) error {
 		subscription.TermID,
 		time.Now().UTC(),
 		subscription.ShopsBitField,
+		subscription.MinPrice,
+		subscription.MaxPrice,
 	)
 	if err != nil {
 		var sqliteErr sqlite3.Error
 		if errors.As(err, &sqliteErr) && errors.Is(sqliteErr.ExtendedCode, sqlite3.ErrConstraintUnique) {
 			return ErrConstraintUnique
 		}
+		return err
+	}
+
+	return nil
+}
+
+func (s *SQLite) GetSubscription(id string) (*Subscription, error) {
+	const query = `
+		SELECT id, user_id, term_id, last_notified_at, shops, min_price, max_price
+		FROM subscriptions
+		WHERE id = ?
+	`
+
+	row := s.DB.QueryRow(query, id)
+
+	subscription := &Subscription{}
+	if err := row.Scan(
+		&subscription.ID,
+		&subscription.UserID,
+		&subscription.TermID,
+		&subscription.LastNotifiedAt,
+		&subscription.ShopsBitField,
+		&subscription.MinPrice,
+		&subscription.MaxPrice,
+	); err != nil {
+		return nil, err
+	}
+
+	return subscription, nil
+}
+
+func (s *SQLite) UpdateSubscription(subscription *Subscription) error {
+	const query = `
+	UPDATE subscriptions
+	SET last_notified_at = ?, shops = ?, min_price = ?, max_price = ?
+	WHERE id = ?
+	`
+
+	_, err := s.DB.Exec(query,
+		subscription.LastNotifiedAt,
+		subscription.ShopsBitField,
+		subscription.MinPrice,
+		subscription.MaxPrice,
+		subscription.ID,
+	)
+	if err != nil {
+		return err
 	}
 
 	return nil
@@ -115,7 +166,7 @@ func (s *SQLite) CreateSubscription(subscription *Subscription) error {
 
 func (s *SQLite) GetUserSubscriptions(userID string) ([]TermSubscription, error) {
 	const query = `
-		SELECT t.id, t.en, t.jp, s.id, s.user_id, s.term_id, s.last_notified_at, s.shops
+		SELECT t.id, t.en, t.jp, s.id, s.user_id, s.term_id, s.last_notified_at, s.shops, s.min_price, s.max_price
 		FROM subscriptions s
 		JOIN terms t ON t.id = s.term_id
 		WHERE s.user_id = ?
@@ -140,6 +191,8 @@ func (s *SQLite) GetUserSubscriptions(userID string) ([]TermSubscription, error)
 			&subscription.TermID,
 			&subscription.LastNotifiedAt,
 			&subscription.ShopsBitField,
+			&subscription.MinPrice,
+			&subscription.MaxPrice,
 		); err != nil {
 			return nil, err
 		}
@@ -155,7 +208,7 @@ func (s *SQLite) GetUserSubscriptions(userID string) ([]TermSubscription, error)
 
 func (s *SQLite) FindSubscriptionsToNotify(window time.Duration, limit int) ([]TermSubscription, error) {
 	const query = `
-		SELECT t.id, t.en, t.jp, s.id, s.user_id, s.term_id, s.last_notified_at, s.shops
+		SELECT t.id, t.en, t.jp, s.id, s.user_id, s.term_id, s.last_notified_at, s.shops, s.min_price, s.max_price
 		FROM subscriptions s
 		JOIN terms t ON t.id = s.term_id
 		WHERE s.last_notified_at < ?
@@ -181,6 +234,8 @@ func (s *SQLite) FindSubscriptionsToNotify(window time.Duration, limit int) ([]T
 			&subscription.TermID,
 			&subscription.LastNotifiedAt,
 			&subscription.ShopsBitField,
+			&subscription.MinPrice,
+			&subscription.MaxPrice,
 		); err != nil {
 			return nil, err
 		}
@@ -192,6 +247,30 @@ func (s *SQLite) FindSubscriptionsToNotify(window time.Duration, limit int) ([]T
 	}
 
 	return subscriptions, nil
+}
+
+func (s *SQLite) SetNotified(subIDs ...string) error {
+	if len(subIDs) == 0 {
+		return nil
+	}
+
+	query := `
+	UPDATE subscriptions
+	SET last_notified_at = ?
+	WHERE id IN (%s)`
+
+	query = fmt.Sprintf(query, strings.Repeat("?,", len(subIDs)-1)+"?")
+	args := []any{time.Now().UTC()}
+	for _, id := range subIDs {
+		args = append(args, id)
+	}
+
+	_, err := s.DB.Exec(query, args...)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (s *SQLite) DeleteUserSubscriptions(userID string, ids ...string) error {

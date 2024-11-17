@@ -1,6 +1,6 @@
 tmp/
 sendibot
-sendibot.db
+sendibot*.db*
 
 # Created by https://www.toptal.com/developers/gitignore/api/go,visualstudiocode,macos,dotenv
 # Edit at https://www.toptal.com/developers/gitignore?templates=go,visualstudiocode,macos,dotenv

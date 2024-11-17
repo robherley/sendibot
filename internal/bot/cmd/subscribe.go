@@ -43,6 +43,18 @@ func (cmd *Subscribe) Options() []*discordgo.ApplicationCommandOption {
 			MaxLength:   termMaxLength,
 			Required:    true,
 		},
+		{
+			Type:        discordgo.ApplicationCommandOptionInteger,
+			Name:        "min",
+			Description: "Minimum price (¥) to alert on",
+			Required:    false,
+		},
+		{
+			Type:        discordgo.ApplicationCommandOptionInteger,
+			Name:        "max",
+			Description: "Maximum price (¥) to alert on",
+			Required:    false,
+		},
 	}
 }
 
@@ -51,7 +63,36 @@ func (cmd *Subscribe) Handle(s *discordgo.Session, i *discordgo.InteractionCreat
 	case discordgo.InteractionApplicationCommand:
 		data := i.ApplicationCommandData()
 
-		searchTermEN := data.Options[0].StringValue()
+		var (
+			searchTermEN string
+			minPrice     *int
+			maxPrice     *int
+		)
+
+		for _, option := range data.Options {
+			switch option.Name {
+			case "search":
+				searchTermEN = option.StringValue()
+			case "min":
+				min := int(option.IntValue())
+				minPrice = &min
+			case "max":
+				max := int(option.IntValue())
+				maxPrice = &max
+			}
+		}
+
+		if minPrice != nil && maxPrice != nil {
+			if *minPrice > *maxPrice {
+				return s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+					Type: discordgo.InteractionResponseChannelMessageWithSource,
+					Data: &discordgo.InteractionResponseData{
+						Content: "⛔ Minimum price must be less than or equal to maximum price.",
+					},
+				})
+			}
+		}
+
 		searchTermJP, err := cmd.sendico.Translate(context.Background(), searchTermEN)
 		if err != nil {
 			return err
@@ -67,6 +108,26 @@ func (cmd *Subscribe) Handle(s *discordgo.Session, i *discordgo.InteractionCreat
 			return err
 		}
 
+		subscription := &db.Subscription{
+			UserID:   UserID(i),
+			TermID:   term.ID,
+			MinPrice: minPrice,
+			MaxPrice: maxPrice,
+		}
+
+		if err = cmd.db.CreateSubscription(subscription); err != nil {
+			if errors.Is(err, db.ErrConstraintUnique) {
+				return s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+					Type: discordgo.InteractionResponseChannelMessageWithSource,
+					Data: &discordgo.InteractionResponseData{
+						Content: fmt.Sprintf("⛔ Already subscribed for search: %q.\nSee subscriptions with `/subscriptions` and `/unsubscribe` if you wish to change your configured subscriptions.", term.EN),
+					},
+				})
+			}
+
+			return err
+		}
+
 		return s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
 			Data: &discordgo.InteractionResponseData{
@@ -76,7 +137,7 @@ func (cmd *Subscribe) Handle(s *discordgo.Session, i *discordgo.InteractionCreat
 					discordgo.ActionsRow{
 						Components: []discordgo.MessageComponent{
 							discordgo.SelectMenu{
-								CustomID:    cmd.Name() + ":shops:" + term.ID,
+								CustomID:    cmd.Name() + ":sub:" + subscription.ID,
 								Placeholder: "🛒 What shops would you like to check?",
 								Options:     cmd.options(),
 								MaxValues:   len(cmd.options()),
@@ -97,14 +158,18 @@ func (cmd *Subscribe) Handle(s *discordgo.Session, i *discordgo.InteractionCreat
 			return nil
 		}
 
-		term, err := cmd.db.GetTerm(args[1])
+		subscription, err := cmd.db.GetSubscription(args[1])
 		if err != nil {
 			return err
 		}
 
-		subscription := &db.Subscription{
-			UserID: userID,
-			TermID: term.ID,
+		if subscription.UserID != userID {
+			return nil
+		}
+
+		term, err := cmd.db.GetTerm(subscription.TermID)
+		if err != nil {
+			return err
 		}
 
 		for _, shop := range i.MessageComponentData().Values {
@@ -119,16 +184,7 @@ func (cmd *Subscribe) Handle(s *discordgo.Session, i *discordgo.InteractionCreat
 			return nil
 		}
 
-		if err = cmd.db.CreateSubscription(subscription); err != nil {
-			if errors.Is(err, db.ErrConstraintUnique) {
-				return s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-					Type: discordgo.InteractionResponseChannelMessageWithSource,
-					Data: &discordgo.InteractionResponseData{
-						Content: fmt.Sprintf("⛔ Already subscribed to shops for search: %q.\nSee subscriptions with `/subscriptions` and `/unsubscribe` if you wish to change your configured subscriptions.", term.EN),
-					},
-				})
-			}
-
+		if err := cmd.db.UpdateSubscription(subscription); err != nil {
 			return err
 		}
 
@@ -144,6 +200,16 @@ func (cmd *Subscribe) Handle(s *discordgo.Session, i *discordgo.InteractionCreat
 		}
 
 		msg := fmt.Sprintf("🔔 Subscribed for term: %q (%s)\nWill check shops: %s", term.EN, term.JP, strings.Join(shops, ", "))
+		if subscription.MinPrice != nil || subscription.MaxPrice != nil {
+			msg += "\n"
+			if subscription.MaxPrice == nil {
+				msg += fmt.Sprintf("Will only alert on items ¥%d or more", *subscription.MinPrice)
+			} else if subscription.MinPrice == nil {
+				msg += fmt.Sprintf("Will only alert on items ¥%d or less", *subscription.MaxPrice)
+			} else {
+				msg += fmt.Sprintf("Will only alert on items ¥%d - ¥%d", *subscription.MinPrice, *subscription.MaxPrice)
+			}
+		}
 
 		dm, err := s.UserChannelCreate(userID)
 		if err != nil {
@@ -167,7 +233,11 @@ func (cmd *Subscribe) Handle(s *discordgo.Session, i *discordgo.InteractionCreat
 }
 
 func (cmd *Subscribe) seedCurrentItems(term *db.Term, sub *db.Subscription) error {
-	results, err := cmd.sendico.BulkSearch(context.Background(), term.JP, sub.Shops()...)
+	results, err := cmd.sendico.BulkSearch(context.Background(), sub.Shops(), sendico.SearchOptions{
+		TermJP:   term.JP,
+		MinPrice: sub.MinPrice,
+		MaxPrice: sub.MaxPrice,
+	})
 	if err != nil {
 		return err
 	}

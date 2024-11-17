@@ -53,7 +53,11 @@ func (l *Looper) Notify(ctx context.Context) {
 				// let's be nice to sendico
 				time.Sleep(2 * time.Second)
 
-				results, err := l.sendico.BulkSearch(ctx, termSub.Term.JP, termSub.Subscription.Shops()...)
+				results, err := l.sendico.BulkSearch(ctx, termSub.Subscription.Shops(), sendico.SearchOptions{
+					TermJP:   termSub.Term.JP,
+					MinPrice: termSub.Subscription.MinPrice,
+					MaxPrice: termSub.Subscription.MaxPrice,
+				})
 				if err != nil {
 					log.Error("failed to bulk search", "err", err, "term_id", termSub.Term.ID)
 					continue
@@ -100,6 +104,16 @@ func (l *Looper) Notify(ctx context.Context) {
 					log.Error("failed to notify new items", "err", err, "term_id", termSub.Term.ID, "user_id", termSub.Subscription.UserID)
 					continue
 				}
+			}
+
+			subIDs := make([]string, 0, len(termSubs))
+			for _, termSub := range termSubs {
+				subIDs = append(subIDs, termSub.Subscription.ID)
+			}
+
+			if err := l.db.SetNotified(subIDs...); err != nil {
+				log.Error("failed to set notified", "err", err)
+				continue
 			}
 		}
 	}

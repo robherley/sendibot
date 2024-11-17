@@ -164,16 +164,28 @@ func (c *Client) Translate(ctx context.Context, text string) (string, error) {
 	return response.Data, nil
 }
 
+type SearchOptions struct {
+	TermJP   string
+	MinPrice *int
+	MaxPrice *int
+}
+
 // Search performs a search for the given term on the specified merchant. It will only return the first page of results.
 // The supplied search term must be in Japanese.
-func (c *Client) Search(ctx context.Context, shop Shop, termJP string) ([]Item, error) {
+func (c *Client) Search(ctx context.Context, shop Shop, opts SearchOptions) ([]Item, error) {
 	path := url.URL{
 		Path: fmt.Sprintf("/api/%s/items", shop.Identifier()),
 	}
 	q := path.Query()
-	q.Set("search", termJP)
+	q.Set("search", opts.TermJP)
 	q.Set("page", "1")
 	q.Set("global", "1")
+	if opts.MinPrice != nil {
+		q.Set("min_price", fmt.Sprintf("%d", *opts.MinPrice))
+	}
+	if opts.MaxPrice != nil {
+		q.Set("max_price", fmt.Sprintf("%d", *opts.MaxPrice))
+	}
 	path.RawQuery = q.Encode()
 
 	resp, err := c.req(ctx, http.MethodGet, path.String(), nil, func(req *http.Request) {
@@ -200,7 +212,7 @@ func (c *Client) Search(ctx context.Context, shop Shop, termJP string) ([]Item, 
 	return response.Data.Items, nil
 }
 
-func (c *Client) BulkSearch(ctx context.Context, termJP string, shops ...Shop) ([]Item, error) {
+func (c *Client) BulkSearch(ctx context.Context, shops []Shop, opts SearchOptions) ([]Item, error) {
 	items := make([]Item, 0)
 	itemsMu := sync.Mutex{}
 
@@ -208,7 +220,7 @@ func (c *Client) BulkSearch(ctx context.Context, termJP string, shops ...Shop) (
 	for _, shop := range shops {
 		shop := shop
 		g.Go(func() error {
-			results, err := c.Search(ctx, shop, termJP)
+			results, err := c.Search(ctx, shop, opts)
 			if err != nil {
 				return err
 			}
