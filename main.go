@@ -37,10 +37,7 @@ func run() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	err := godotenv.Load()
-	if err != nil {
-		return err
-	}
+	_ = godotenv.Load()
 
 	dbFile := flag.String("db", "sendibot.db", "path to the database file")
 	register := flag.String("register", "", "guild to register commands (or 'global')")
