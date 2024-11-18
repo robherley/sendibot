@@ -3,19 +3,25 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
-	"github.com/joho/godotenv"
+	"github.com/kelseyhightower/envconfig"
 	"github.com/lmittmann/tint"
 	"github.com/robherley/sendibot/internal/bot"
 	"github.com/robherley/sendibot/internal/db"
 	"github.com/robherley/sendibot/internal/looper"
 	"github.com/robherley/sendibot/pkg/sendico"
 )
+
+type Config struct {
+	DiscordToken string `desc:"API Token for Discord" required:"true"`
+	DatabaseFile string `desc:"Path of SQLite database file" default:"sendibot.db" required:"false"`
+}
 
 func init() {
 	slog.SetDefault(slog.New(
@@ -37,14 +43,24 @@ func run() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	_ = godotenv.Load()
+	cfg := Config{}
 
-	dbFile := flag.String("db", "sendibot.db", "path to the database file")
+	flag.Usage = func() {
+		fmt.Fprint(flag.CommandLine.Output(), "Usage: sendibot [flags]\n\n")
+		envconfig.Usagef("", &cfg, flag.CommandLine.Output(), envconfig.DefaultListFormat)
+		fmt.Fprintln(flag.CommandLine.Output(), "\nFlags:")
+		flag.PrintDefaults()
+	}
+
 	register := flag.String("register", "", "guild to register commands (or 'global')")
 	unregister := flag.String("unregister", "", "guild to unregister commands (or 'global')")
 	flag.Parse()
 
-	db, err := db.NewSQLite(*dbFile)
+	if err := envconfig.Process("", &cfg); err != nil {
+		return err
+	}
+
+	db, err := db.NewSQLite(cfg.DatabaseFile)
 	if err != nil {
 		return err
 	}
@@ -59,7 +75,7 @@ func run() error {
 		return err
 	}
 
-	bot, err := bot.New(os.Getenv("DISCORD_TOKEN"), db, sendico)
+	bot, err := bot.New(cfg.DiscordToken, db, sendico)
 	if err != nil {
 		return err
 	}
