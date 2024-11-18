@@ -1,6 +1,8 @@
-FROM golang:1.23 AS build
+FROM golang:1.23-alpine AS build
 
 WORKDIR /build
+
+RUN apk update && apk add --no-cache musl-dev gcc build-base
 
 COPY go.mod ./
 COPY go.sum ./
@@ -11,7 +13,7 @@ COPY . .
 
 RUN go build
 
-FROM ubuntu:22.04
+FROM alpine
 
 COPY --from=build /build/sendibot /usr/bin/sendibot
 
