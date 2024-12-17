@@ -5,16 +5,17 @@ import (
 	"strings"
 
 	"github.com/bwmarrin/discordgo"
+	"github.com/robherley/sendibot/internal/bot/emoji"
 	"github.com/robherley/sendibot/internal/db"
 )
 
-func NewSubscriptions(db db.DB, emojis map[string]string) Handler {
+func NewSubscriptions(db db.DB, emojis *emoji.Store) Handler {
 	return &Subscriptions{db, emojis}
 }
 
 type Subscriptions struct {
 	db     db.DB
-	emojis map[string]string
+	emojis *emoji.Store
 }
 
 func (cmd *Subscriptions) Name() string {
@@ -70,8 +71,15 @@ func (cmd *Subscriptions) Handle(s *discordgo.Session, i *discordgo.InteractionC
 				builder.WriteString(" ")
 			}
 
-			for _, shop := range sub.Subscription.Shops() {
-				builder.WriteString("<:" + shop.Identifier() + ":" + cmd.emojis[shop.Identifier()] + "> ")
+			for i, shop := range sub.Subscription.Shops() {
+				if cmd.emojis.Has(shop.Identifier()) {
+					builder.WriteString(cmd.emojis.For(shop.Identifier()))
+				} else {
+					builder.WriteString(shop.Name())
+					if i < len(sub.Subscription.Shops())-1 {
+						builder.WriteString(", ")
+					}
+				}
 			}
 			builder.WriteString("\n")
 		}

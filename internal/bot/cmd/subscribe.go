@@ -8,18 +8,19 @@ import (
 	"strings"
 
 	"github.com/bwmarrin/discordgo"
+	"github.com/robherley/sendibot/internal/bot/emoji"
 	"github.com/robherley/sendibot/internal/db"
 	"github.com/robherley/sendibot/pkg/sendico"
 )
 
-func NewSubscribe(db db.DB, sendico *sendico.Client, emojis map[string]string) Handler {
+func NewSubscribe(db db.DB, sendico *sendico.Client, emojis *emoji.Store) Handler {
 	return &Subscribe{db, sendico, emojis, nil}
 }
 
 type Subscribe struct {
 	db      db.DB
 	sendico *sendico.Client
-	emojis  map[string]string
+	emojis  *emoji.Store
 	opts    []discordgo.SelectMenuOption
 }
 
@@ -194,12 +195,18 @@ func (cmd *Subscribe) Handle(s *discordgo.Session, i *discordgo.InteractionCreat
 			// this is best effort
 		}
 
-		shops := make([]string, 0, len(subscription.Shops()))
+		shopNames := make([]string, 0, len(subscription.Shops()))
 		for _, shop := range subscription.Shops() {
-			shops = append(shops, fmt.Sprintf("<:%s:%s> %s", shop.Identifier(), cmd.emojis[shop.Identifier()], shop.Name()))
+			shopName := shop.Name()
+
+			if cmd.emojis.Has(shop.Identifier()) {
+				shopName = cmd.emojis.For(shop.Identifier()) + " " + shopName
+			}
+
+			shopNames = append(shopNames, shopName)
 		}
 
-		msg := fmt.Sprintf("🔔 Subscribed for term: %q (%s)\nWill check shops: %s", term.EN, term.JP, strings.Join(shops, ", "))
+		msg := fmt.Sprintf("🔔 Subscribed for term: %q (%s)\nWill check shops: %s", term.EN, term.JP, strings.Join(shopNames, ", "))
 		if subscription.MinPrice != nil || subscription.MaxPrice != nil {
 			msg += "\n"
 			if subscription.MaxPrice == nil {
@@ -265,13 +272,18 @@ func (cmd *Subscribe) options() []discordgo.SelectMenuOption {
 
 	cmd.opts = make([]discordgo.SelectMenuOption, 0, len(sendico.Shops))
 	for _, shop := range sendico.Shops {
-		cmd.opts = append(cmd.opts, discordgo.SelectMenuOption{
+		opt := discordgo.SelectMenuOption{
 			Label: shop.Name(),
 			Value: shop.Identifier(),
-			Emoji: &discordgo.ComponentEmoji{
-				ID: cmd.emojis[shop.Identifier()],
-			},
-		})
+		}
+
+		if cmd.emojis.Has(shop.Identifier()) {
+			opt.Emoji = &discordgo.ComponentEmoji{
+				ID: cmd.emojis.ID(shop.Identifier()),
+			}
+		}
+
+		cmd.opts = append(cmd.opts, opt)
 	}
 
 	return cmd.opts
