@@ -3,9 +3,9 @@ package bot
 import (
 	"fmt"
 	"log/slog"
+	"runtime/debug"
 
 	"github.com/bwmarrin/discordgo"
-	"github.com/davecgh/go-spew/spew"
 	"github.com/robherley/sendibot/internal/bot/cmd"
 	"github.com/robherley/sendibot/internal/bot/emoji"
 	"github.com/robherley/sendibot/internal/db"
@@ -39,6 +39,7 @@ func New(token string, db db.DB, sendico *sendico.Client) (*Bot, error) {
 		session: session,
 	}
 
+	b.emojis = emoji.NewStore()
 	b.handlers = buildHandlers(
 		cmd.NewPing(),
 		cmd.NewSubscribe(db, sendico, b.emojis),
@@ -50,15 +51,58 @@ func New(token string, db db.DB, sendico *sendico.Client) (*Bot, error) {
 }
 
 func (b *Bot) Start() (err error) {
-	b.addHandlers()
 	if err := b.session.Open(); err != nil {
 		return err
 	}
 
-	b.emojis, err = emoji.Fetch(b.session)
-	if err != nil {
+	if err := b.emojis.Initialize(b.session); err != nil {
 		return err
 	}
+
+	b.session.AddHandler(func(s *discordgo.Session, r *discordgo.Ready) {
+		slog.Info("ready to go", "bot_user", r.User.String())
+	})
+
+	b.session.AddHandler(func(s *discordgo.Session, i *discordgo.InteractionCreate) {
+		log := LogWith(i, "interaction_type", i.Type.String())
+
+		defer func() {
+			if r := recover(); r != nil {
+				log.Error("panic", "err", r, "stack", string(debug.Stack()))
+			}
+		}()
+
+		switch i.Type {
+		case discordgo.InteractionApplicationCommand:
+			handler, ok := b.handlers[i.ApplicationCommandData().Name]
+			if !ok {
+				log.Warn("no handler found")
+				return
+			}
+
+			log.Info("invoking command")
+			if err := handler.Handle(s, i); err != nil {
+				log.Error("failed", "err", err)
+			}
+		case discordgo.InteractionMessageComponent:
+			customID := i.MessageComponentData().CustomID
+			log = log.With("custom_id", customID)
+
+			cmd, _ := cmd.FromCustomID(customID)
+			handler, ok := b.handlers[cmd]
+			if !ok {
+				log.Warn("no handler found")
+				return
+			}
+
+			log.Info("invoking command")
+			if err := handler.Handle(s, i); err != nil {
+				log.Error("failed", "err", err)
+			}
+		default:
+			log.Warn("unknown interaction type")
+		}
+	})
 
 	return nil
 }
@@ -132,56 +176,6 @@ func (b *Bot) NotifyNewItems(termEN, userID string, items []sendico.Item) error 
 			return err
 		}
 	}
-
-	return nil
-}
-
-func (b *Bot) addHandlers() error {
-	b.session.AddHandler(func(s *discordgo.Session, r *discordgo.Ready) {
-		slog.Info("ready to go", "bot_user", r.User.String())
-	})
-
-	b.session.AddHandler(func(s *discordgo.Session, i *discordgo.InteractionCreate) {
-		log := LogWith(i, "interaction_type", i.Type.String())
-
-		defer func() {
-			if r := recover(); r != nil {
-				log.Error("panic", "err", r)
-			}
-		}()
-
-		switch i.Type {
-		case discordgo.InteractionApplicationCommand:
-			handler, ok := b.handlers[i.ApplicationCommandData().Name]
-			if !ok {
-				log.Warn("no handler found")
-				return
-			}
-
-			log.Info("invoking command")
-			if err := handler.Handle(s, i); err != nil {
-				log.Error("failed", "err", err)
-			}
-		case discordgo.InteractionMessageComponent:
-			customID := i.MessageComponentData().CustomID
-			log = log.With("custom_id", customID)
-
-			cmd, _ := cmd.FromCustomID(customID)
-			handler, ok := b.handlers[cmd]
-			if !ok {
-				log.Warn("no handler found")
-				return
-			}
-
-			log.Info("invoking command")
-			if err := handler.Handle(s, i); err != nil {
-				log.Error("failed", "err", err)
-			}
-		default:
-			log.Warn("unknown interaction type")
-			spew.Dump(i)
-		}
-	})
 
 	return nil
 }

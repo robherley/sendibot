@@ -12,6 +12,10 @@ type Store struct {
 	store sync.Map
 }
 
+func NewStore() *Store {
+	return &Store{}
+}
+
 func (e *Store) Set(name, id string) {
 	e.store.Store(name, id)
 }
@@ -34,11 +38,11 @@ func (e *Store) Has(name string) bool {
 	return ok
 }
 
-func Fetch(session *discordgo.Session) (*Store, error) {
+func (s *Store) Initialize(session *discordgo.Session) error {
 	appID := session.State.Application.ID
 	body, err := session.Request("GET", discordgo.EndpointApplication(appID)+"/emojis", nil)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	response := struct {
@@ -49,14 +53,13 @@ func Fetch(session *discordgo.Session) (*Store, error) {
 	}{}
 
 	if err := json.Unmarshal(body, &response); err != nil {
-		return nil, err
+		return err
 	}
 
-	var emoji *Store
 	for _, item := range response.Items {
-		emoji.Set(item.Name, item.ID)
+		s.Set(item.Name, item.ID)
 	}
 
 	slog.Info("fetched emojis", "count", len(response.Items))
-	return emoji, nil
+	return nil
 }
