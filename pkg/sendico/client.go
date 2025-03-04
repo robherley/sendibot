@@ -62,7 +62,7 @@ func New(ctx context.Context, opts ...ClientOption) (*Client, error) {
 
 	if c.secret == "" {
 		if err := c.findAPISecret(ctx); err != nil {
-			return nil, err
+			slog.Warn("failed to find API secret", "err", err)
 		}
 	}
 
