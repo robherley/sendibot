@@ -4,22 +4,21 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
-	"regexp"
 	"strings"
 	"sync"
 
+	"github.com/PuerkitoBio/goquery"
+	orderedmap "github.com/wk8/go-ordered-map/v2"
 	"golang.org/x/sync/errgroup"
 )
 
-var (
-	// APISecretRegex is a regular expression that matches the API secret embedded in the Sendico NUXT JS snippet.
-	APISecretRegex = regexp.MustCompile(`apiSecret:"([^"]+)"`)
-
+const (
 	// DefaultBaseURL is the default base URL for the Sendico API.
 	DefaultBaseURL = "https://sendico.com"
 )
@@ -28,13 +27,7 @@ type ClientOption func(*Client)
 
 func WithHTTPClient(httpClient *http.Client) ClientOption {
 	return func(c *Client) {
-		c.Client = httpClient
-	}
-}
-
-func WithAPISecret(secret string) ClientOption {
-	return func(c *Client) {
-		c.secret = secret
+		c.httpClient = httpClient
 	}
 }
 
@@ -45,105 +38,164 @@ func WithBaseURL(baseURL string) ClientOption {
 }
 
 type Client struct {
-	*http.Client
-	secret  string
-	baseURL string
+	httpClient *http.Client
+	mu         sync.RWMutex
+	hmacSecret string
+	baseURL    string
 }
 
 func New(ctx context.Context, opts ...ClientOption) (*Client, error) {
 	c := &Client{
-		Client:  http.DefaultClient,
-		baseURL: DefaultBaseURL,
+		httpClient: http.DefaultClient,
+		baseURL:    DefaultBaseURL,
 	}
 
 	for _, opt := range opts {
 		opt(c)
 	}
 
-	if c.secret == "" {
-		if err := c.findAPISecret(ctx); err != nil {
-			slog.Warn("failed to find API secret", "err", err)
-		}
+	if err := c.FindHMAC(ctx); err != nil {
+		return nil, err
 	}
 
 	return c, nil
 }
 
-func (c *Client) req(ctx context.Context, method, path string, body io.Reader, opts ...func(*http.Request)) (*http.Response, error) {
+// HMACSecret returns the HMAC secret key used to sign requests to the Sendico API.
+func (c *Client) HMACSecret() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.hmacSecret
+}
+
+// FindHMAC finds the HMAC secret key used to sign requests to the Sendico API. This is very jank, it will go through
+// the frontend's SSR'd nuxt data and attempt to find the latest hmac secret key(s). This will most likely break at
+// some point in the future.
+func (c *Client) FindHMAC(ctx context.Context) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL, nil)
+	if err != nil {
+		return NewRequestError(err)
+	}
+
+	res, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+
+	defer res.Body.Close()
+
+	if res.StatusCode != 200 {
+		return NewUnexpectedResponseCodeError(res.StatusCode)
+	}
+
+	doc, err := goquery.NewDocumentFromReader(res.Body)
+	if err != nil {
+		return err
+	}
+
+	selection := doc.Find("script#__NUXT_DATA__")
+	if selection.Length() == 0 {
+		return errors.New("script tag not found")
+	}
+
+	var unstruct []any
+	if err := json.Unmarshal([]byte(selection.Nodes[0].FirstChild.Data), &unstruct); err != nil {
+		return err
+	}
+
+	ptr := int64(-1)
+	for _, obj := range unstruct {
+		switch v := obj.(type) {
+		case map[string]any:
+			if val, ok := v["$ssecret_keys"]; ok {
+				ptr = int64(val.(float64))
+				break
+			}
+		}
+	}
+
+	if ptr == -1 {
+		return errors.New("unable to find reference to secret key")
+	}
+
+	keyPtrs := unstruct[ptr].([]any)
+	secretKeys := make([]string, len(keyPtrs))
+	for _, keyPtr := range keyPtrs {
+		secretKeys = append(secretKeys, unstruct[int64(keyPtr.(float64))].(string))
+	}
+
+	if len(secretKeys) == 0 {
+		return errors.New("no secret keys found")
+	}
+
+	newSecret := secretKeys[len(secretKeys)-1]
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	changed := c.hmacSecret != newSecret
+	c.hmacSecret = newSecret
+	slog.Info("refreshing HMAC secret key", "changed", changed)
+	return nil
+}
+
+func (c *Client) req(ctx context.Context, method, path string, body io.Reader, hmac *HMACAttributes, opts ...func(*http.Request)) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, body)
 	if err != nil {
 		return nil, NewRequestError(err)
-	}
-
-	if c.secret != "" {
-		req.Header.Set("Sendico-Secure", c.secret)
 	}
 
 	for _, opt := range opts {
 		opt(req)
 	}
 
-	resp, err := c.Do(req)
+	if hmac != nil {
+		req.Header.Set("X-Sendico-Signature", hmac.Signature)
+		req.Header.Set("X-Sendico-Nonce", hmac.Nonce)
+		req.Header.Set("X-Sendico-Timestamp", fmt.Sprintf("%d", hmac.Timestamp))
+	}
+
+	res, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, NewRequestError(err)
 	}
 
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+	if res.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(res.Body)
 		slog.ErrorContext(ctx, "unexpected status code",
 			"body", string(body),
-			"code", resp.StatusCode,
+			"code", res.StatusCode,
 			"path", path,
 			"method", method,
 		)
-		_ = resp.Body.Close()
-		return nil, NewUnexpectedResponseCodeError(resp.StatusCode)
+		_ = res.Body.Close()
+		return nil, NewUnexpectedResponseCodeError(res.StatusCode)
 	}
 
-	return resp, err
-}
-
-func (c *Client) findAPISecret(ctx context.Context) error {
-	resp, err := c.req(ctx, http.MethodGet, "/", nil, func(req *http.Request) {
-		req.Header.Set("Accept", "text/html")
-	})
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	bytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return err
-	}
-
-	matches := APISecretRegex.FindSubmatch(bytes)
-	if len(matches) < 2 {
-		return ErrSecretNotFound
-	}
-
-	c.secret = string(matches[1])
-	return nil
+	return res, err
 }
 
 // Translate translates the given text from English to Japanese.
 func (c *Client) Translate(ctx context.Context, text string) (string, error) {
-	request := struct {
-		String string `json:"string"`
-		From   string `json:"from"`
-		To     string `json:"to"`
-	}{
-		String: text,
-		From:   "en",
-		To:     "ja",
-	}
+	path := "/api/translate"
+
+	request := orderedmap.New[string, any]()
+	request.Set("from", "en")
+	request.Set("string", text)
+	request.Set("to", "ja")
 
 	requestJSON, err := json.Marshal(request)
 	if err != nil {
 		return "", err
 	}
 
-	resp, err := c.req(ctx, http.MethodPost, "/api/translate", bytes.NewReader(requestJSON), func(req *http.Request) {
+	hmac, err := BuildHMAC(HMACInput{
+		Secret:  c.HMACSecret(),
+		Path:    path,
+		Payload: request,
+	})
+	if err != nil {
+		return "", err
+	}
+	resp, err := c.req(ctx, http.MethodPost, path, bytes.NewReader(requestJSON), hmac, func(req *http.Request) {
 		req.Header.Set("Content-Type", "application/json")
 	})
 	if err != nil {
@@ -176,19 +228,34 @@ func (c *Client) Search(ctx context.Context, shop Shop, opts SearchOptions) ([]I
 	path := url.URL{
 		Path: fmt.Sprintf("/api/%s/items", shop.Identifier()),
 	}
-	q := path.Query()
-	q.Set("search", opts.TermJP)
-	q.Set("page", "1")
-	q.Set("global", "1")
-	if opts.MinPrice != nil {
-		q.Set("min_price", fmt.Sprintf("%d", *opts.MinPrice))
-	}
+
+	params := orderedmap.New[string, any]()
+	params.Set("global", "1")
 	if opts.MaxPrice != nil {
-		q.Set("max_price", fmt.Sprintf("%d", *opts.MaxPrice))
+		params.Set("max_price", fmt.Sprintf("%d", *opts.MaxPrice))
+	}
+	if opts.MinPrice != nil {
+		params.Set("min_price", fmt.Sprintf("%d", *opts.MinPrice))
+	}
+	params.Set("page", "1")
+	params.Set("search", opts.TermJP)
+
+	q := path.Query()
+	for pair := params.Oldest(); pair != nil; pair = pair.Next() {
+		q.Add(pair.Key, fmt.Sprintf("%v", pair.Value))
 	}
 	path.RawQuery = q.Encode()
 
-	resp, err := c.req(ctx, http.MethodGet, path.String(), nil, func(req *http.Request) {
+	hmac, err := BuildHMAC(HMACInput{
+		Secret:  c.HMACSecret(),
+		Path:    path.Path,
+		Payload: params,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := c.req(ctx, http.MethodGet, path.String(), nil, hmac, func(req *http.Request) {
 		req.Header.Set("Content-Type", "application/json")
 	})
 	if err != nil {
@@ -212,6 +279,7 @@ func (c *Client) Search(ctx context.Context, shop Shop, opts SearchOptions) ([]I
 	return response.Data.Items, nil
 }
 
+// BulkSearch performs a search for the given term on the specified merchants. It will only return the first page of results.
 func (c *Client) BulkSearch(ctx context.Context, shops []Shop, opts SearchOptions) ([]Item, error) {
 	items := make([]Item, 0)
 	itemsMu := sync.Mutex{}

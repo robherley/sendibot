@@ -110,6 +110,7 @@ func run() error {
 	l := looper.New(db, sendico, bot)
 	go l.Notify(ctx)
 	go l.Cleanup(ctx)
+	go l.Refresh(ctx)
 
 	wait()
 	return nil
