@@ -14,6 +14,7 @@ import (
 const (
 	TickNotify  = 2 * time.Minute
 	TickCleanup = 1 * time.Hour
+	TickRefresh = 5 * time.Minute
 
 	WindowNotify  = 5 * time.Minute
 	WindowCleanup = 72 * time.Hour
@@ -136,6 +137,25 @@ func (l *Looper) Cleanup(ctx context.Context) {
 				log.Error("failed to cleanup items", "err", err)
 				continue
 			}
+		}
+	}
+}
+
+func (l *Looper) Refresh(ctx context.Context) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	log := slog.With("component", "looper.refresh")
+	log.Info("starting loop", "tick", TickRefresh)
+
+	select {
+	case <-ctx.Done():
+		log.Info("context done, stopping")
+		return
+	case <-ticker.C:
+		if err := l.sendico.FindHMAC(ctx); err != nil {
+			log.Error("failed to refresh HMAC secret key", "err", err)
+			return
 		}
 	}
 }
