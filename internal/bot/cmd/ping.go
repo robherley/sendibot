@@ -3,9 +3,9 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 
 	"github.com/bwmarrin/discordgo"
+	"github.com/robherley/sendibot/internal/meta"
 )
 
 func NewPing() Handler {
@@ -34,17 +34,12 @@ func (cmd *ping) Handle(s *discordgo.Session, i *discordgo.InteractionCreate) er
 		user = i.Member.User.String()
 	}
 
-	version := "unknown"
-	if v, ok := os.LookupEnv("VERSION"); ok {
-		version = v
-	}
-
 	payload := map[string]interface{}{
 		"user":       user,
 		"guild_id":   i.GuildID,
 		"dm":         i.GuildID == "",
 		"channel_id": i.ChannelID,
-		"version":    version,
+		"version":    meta.Version,
 	}
 
 	bytes, err := json.MarshalIndent(payload, "", "  ")
