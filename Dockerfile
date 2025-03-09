@@ -1,4 +1,4 @@
-FROM golang:1.23-alpine AS build
+FROM golang:1.24-alpine AS build
 
 WORKDIR /build
 
@@ -11,10 +11,13 @@ RUN go mod verify
 
 COPY . .
 
-RUN go build
+ARG VERSION
+RUN go build -ldflags "-X github.com/robherley/sendibot/internal/meta.Version=${VERSION}"
 
 FROM alpine
 
 COPY --from=build /build/sendibot /usr/bin/sendibot
+RUN apk add --no-cache tzdata
+ENV TZ=Etc/UTC
 
 ENTRYPOINT [ "/usr/bin/sendibot" ]
