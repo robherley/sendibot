@@ -107,7 +107,7 @@ func (c *Client) FindHMAC(ctx context.Context) error {
 	for _, obj := range unstruct {
 		switch v := obj.(type) {
 		case map[string]any:
-			if val, ok := v["$ssecret_keys"]; ok {
+			if val, ok := v["$sapi_tokens"]; ok {
 				ptr = int64(val.(float64))
 				break
 			}
@@ -120,15 +120,15 @@ func (c *Client) FindHMAC(ctx context.Context) error {
 
 	keyPtrs := unstruct[ptr].([]any)
 	secretKeys := make([]string, len(keyPtrs))
-	for _, keyPtr := range keyPtrs {
-		secretKeys = append(secretKeys, unstruct[int64(keyPtr.(float64))].(string))
+	for i, keyPtr := range keyPtrs {
+		secretKeys[i] = unstruct[int64(keyPtr.(float64))].(string)
 	}
 
 	if len(secretKeys) == 0 {
 		return errors.New("no secret keys found")
 	}
 
-	newSecret := secretKeys[len(secretKeys)-1]
+	newSecret := DecodeHMACKey(secretKeys[len(secretKeys)-1])
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	changed := c.hmacSecret != newSecret

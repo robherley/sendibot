@@ -135,7 +135,7 @@ func (b *Bot) NotifyNewItems(termEN, userID string, items []sendico.Item) error 
 			shop = b.emojis.For(item.Shop.Identifier()) + " " + shop
 		}
 
-		embeds = append(embeds, &discordgo.MessageEmbed{
+		embed := &discordgo.MessageEmbed{
 			Title: item.Name,
 			Image: &discordgo.MessageEmbedImage{
 				URL: item.Image,
@@ -151,14 +151,19 @@ func (b *Bot) NotifyNewItems(termEN, userID string, items []sendico.Item) error 
 					Value:  shop,
 					Inline: true,
 				},
-				{
-					Name:   "Category",
-					Value:  item.Category.String(),
-					Inline: true,
-				},
 			},
 			URL: item.SendicoLink(),
-		})
+		}
+
+		if item.Category != nil {
+			embed.Fields = append(embed.Fields, &discordgo.MessageEmbedField{
+				Name:   "Category",
+				Value:  item.Category.String(),
+				Inline: true,
+			})
+		}
+
+		embeds = append(embeds, embed)
 	}
 
 	msg, err := b.session.ChannelMessageSendComplex(dm.ID, &discordgo.MessageSend{
