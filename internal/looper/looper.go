@@ -12,11 +12,11 @@ import (
 )
 
 const (
-	TickNotify  = 2 * time.Minute
+	TickNotify  = 5 * time.Minute
 	TickCleanup = 1 * time.Hour
-	TickRefresh = 5 * time.Minute
+	TickRefresh = 30 * time.Minute
 
-	WindowNotify  = 5 * time.Minute
+	WindowNotify  = 10 * time.Minute
 	WindowCleanup = 72 * time.Hour
 )
 
@@ -44,7 +44,7 @@ func (l *Looper) Notify(ctx context.Context) {
 			return
 		case <-ticker.C:
 			// the following search/check/notify flow will probably not scale well. should be fine for low volume though
-			termSubs, err := l.db.FindSubscriptionsToNotify(WindowNotify, 100)
+			termSubs, err := l.db.FindSubscriptionsToNotify(WindowNotify, 250)
 			if err != nil {
 				log.Error("failed to find terms to update", "err", err)
 				continue
