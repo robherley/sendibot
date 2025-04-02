@@ -1,3 +1,6 @@
+> [!IMPORTANT]  
+> Due to some backend changes, this **bot will no longer wor**k with Sendico. If you want to be notified of new listings, consider notifications provided by the merchants directly.
+
 # sendibot
 
 Subscribe to Sendico updates via Discord.
